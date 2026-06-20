@@ -1,1 +1,335 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Transcripción de Audio</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif; background: #f0f4f8; min-height: 100vh; padding: 20px; }
+  .container { max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 1.4rem; color: #1a202c; margin-bottom: 4px; }
+  .subtitle { font-size: 0.88rem; color: #718096; margin-bottom: 20px; }
 
+  .card { background: white; border-radius: 12px; padding: 22px; border: 1px solid #e2e8f0; margin-bottom: 14px; }
+
+  .upload-box {
+    border: 2px dashed #cbd5e0; border-radius: 10px; padding: 32px;
+    text-align: center; cursor: pointer; background: #f7fafc;
+  }
+  .upload-box input { display: none; }
+  .upload-icon { font-size: 2rem; margin-bottom: 8px; }
+  .upload-text { color: #4a5568; font-size: 0.95rem; }
+  .upload-sub { color: #a0aec0; font-size: 0.82rem; margin-top: 4px; }
+
+  .btn {
+    width: 100%; background: #3182ce; color: white; border: none;
+    border-radius: 8px; padding: 13px; font-size: 1rem; font-weight: 600;
+    cursor: pointer; -webkit-appearance: none; touch-action: manipulation;
+  }
+  .btn:disabled { background: #a0aec0; }
+
+  .progress-bar { background: #e2e8f0; border-radius: 99px; height: 8px; overflow: hidden; margin: 10px 0 14px; }
+  .progress-fill { background: linear-gradient(90deg, #3182ce, #63b3ed); height: 100%; border-radius: 99px; transition: width 0.4s ease; }
+  .status { color: #4a5568; font-size: 0.88rem; margin-bottom: 4px; }
+
+  .chunk { margin-bottom: 14px; padding: 12px 16px; background: #f7fafc; border-radius: 8px; border-left: 3px solid #4299e1; }
+  .chunk-time { font-size: 0.75rem; color: #a0aec0; font-family: monospace; margin-bottom: 4px; }
+  .chunk-text { color: #2d3748; line-height: 1.7; font-size: 0.95rem; white-space: pre-wrap; }
+
+  .copy-btn { float: right; background: #edf2f7; border: none; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 0.82rem; color: #4a5568; font-weight: 500; }
+
+  .warning { background: #fffbeb; border: 1px solid #f6e05e; border-radius: 8px; padding: 12px 16px; color: #744210; font-size: 0.85rem; margin-bottom: 12px; }
+  .info { background: #ebf8ff; border: 1px solid #bee3f8; border-radius: 8px; padding: 12px 16px; color: #2b6cb0; font-size: 0.85rem; margin-bottom: 12px; }
+  .error { background: #fff5f5; border: 1px solid #fed7d7; border-radius: 8px; padding: 12px 16px; color: #c53030; font-size: 0.85rem; margin-top: 12px; }
+  .error pre { white-space: pre-wrap; font-size: 0.75rem; margin-top: 8px; opacity: 0.8; }
+  .file-info { font-size: 0.86rem; color: #276749; padding: 10px 14px; background: #f0fff4; border-radius: 8px; border: 1px solid #c6f6d5; margin-top: 10px; }
+
+  .diag { font-size: 0.78rem; color: #a0aec0; font-family: monospace; margin-top: 10px; line-height: 1.5; }
+  .diag .ok { color: #38a169; }
+  .diag .bad { color: #e53e3e; }
+
+  .legal-note { background: #f7fafc; border-left: 4px solid #3182ce; padding: 12px 16px; border-radius: 0 8px 8px 0; font-size: 0.82rem; color: #4a5568; margin-top: 16px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>🎙️ Transcripción de Audio en Español</h1>
+  <p class="subtitle">Procesamiento local en el dispositivo — sin clave API, sin servidores externos</p>
+
+  <div class="card" id="diagCard">
+    <div class="status" style="font-weight:600; margin-bottom:8px;">Diagnóstico del dispositivo</div>
+    <div class="diag" id="diagOutput">Comprobando compatibilidad...</div>
+  </div>
+
+  <div class="card">
+    <div class="upload-box" onclick="document.getElementById('audioInput').click()">
+      <input type="file" id="audioInput" accept="audio/*,.m4a,.mp3,.wav,.ogg,.flac,.aac,audio/x-m4a,audio/mp4">
+      <div class="upload-icon">📁</div>
+      <div class="upload-text">Toque para seleccionar el archivo de audio</div>
+      <div class="upload-sub">M4A, MP3, WAV, OGG, FLAC</div>
+    </div>
+    <div id="fileInfo" style="display:none" class="file-info"></div>
+  </div>
+
+  <div class="card">
+    <div id="statusArea" style="display:none">
+      <div class="status" id="statusText">Inicializando...</div>
+      <div class="progress-bar"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
+    </div>
+    <button class="btn" id="transcribeBtn" disabled>Esperando diagnóstico...</button>
+    <div id="errorBox" style="display:none" class="error"></div>
+  </div>
+
+  <div class="card" id="resultCard" style="display:none">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <strong style="font-size:1.05rem">📄 Transcripción</strong>
+      <button class="copy-btn" onclick="copyAll()">📋 Copiar todo</button>
+    </div>
+    <div id="transcriptContent"></div>
+    <div class="legal-note">
+      <strong>Nota legal:</strong> Transcripción generada automáticamente. Se recomienda revisión humana para uso en procedimientos legales.<br>
+      Archivo: <span id="legalFile">—</span> &nbsp;|&nbsp; Fecha: <span id="legalDate">—</span>
+    </div>
+  </div>
+</div>
+
+<script>
+// ---- Diagnostics (runs immediately, no module dependency) ----
+function runDiagnostics() {
+  const checks = [];
+  const out = document.getElementById('diagOutput');
+
+  // WebAssembly
+  const hasWasm = typeof WebAssembly === 'object';
+  checks.push([hasWasm, 'WebAssembly: ' + (hasWasm ? 'disponible' : 'NO disponible')]);
+
+  // SharedArrayBuffer (needed by some wasm threads, not required for basic ops)
+  const hasSAB = typeof SharedArrayBuffer !== 'undefined';
+  checks.push([true, 'SharedArrayBuffer: ' + (hasSAB ? 'disponible' : 'no disponible (no crítico)')]);
+
+  // Fetch / streams
+  const hasFetch = typeof fetch === 'function';
+  checks.push([hasFetch, 'Fetch API: ' + (hasFetch ? 'disponible' : 'NO disponible')]);
+
+  // FileReader
+  const hasFileReader = typeof FileReader === 'function';
+  checks.push([hasFileReader, 'FileReader: ' + (hasFileReader ? 'disponible' : 'NO disponible')]);
+
+  // Device memory hint
+  const mem = navigator.deviceMemory || 'desconocida';
+  checks.push([true, 'Memoria del dispositivo: ' + mem + (typeof mem === 'number' ? ' GB' : '')]);
+
+  // User agent
+  checks.push([true, 'Navegador: ' + navigator.userAgent.slice(0, 70) + '...']);
+
+  out.innerHTML = checks.map(([ok, msg]) => 
+    '<div class="' + (ok ? 'ok' : 'bad') + '">' + (ok ? '✓' : '✗') + ' ' + msg + '</div>'
+  ).join('');
+
+  return checks.every(c => c[0] || true); // we don't hard-fail on optional checks
+}
+
+const diagOk = runDiagnostics();
+</script>
+
+<script type="module">
+let pipelineFn = null;
+let envObj = null;
+let loadError = null;
+
+const statusEl = document.getElementById('statusText');
+const transcribeBtn = document.getElementById('transcribeBtn');
+const errorBox = document.getElementById('errorBox');
+
+function showLoadError(err) {
+  errorBox.style.display = 'block';
+  errorBox.innerHTML = '❌ No se pudo cargar el motor de transcripción en este dispositivo.<pre>' + 
+    (err?.message || String(err)) + '</pre>' +
+    '<div style="margin-top:8px">Esto puede pasar en iPadOS por restricciones de Safari con WebAssembly en ciertas configuraciones (Modo de Navegación Privada, restricciones de Pantalla de Tiempo, o bloqueadores de contenido). Pruebe: 1) desactivar el bloqueador de contenido para esta página, 2) salir del modo privado, 3) usar Chrome para iPadOS.</div>';
+  transcribeBtn.textContent = 'Motor no disponible';
+  transcribeBtn.disabled = true;
+}
+
+(async () => {
+  try {
+    const mod = await import('https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2/dist/transformers.min.js');
+    pipelineFn = mod.pipeline;
+    envObj = mod.env;
+    envObj.allowLocalModels = false;
+    transcribeBtn.textContent = 'Transcribir';
+    document.getElementById('audioInput').addEventListener('change', handleFile);
+    checkReady();
+  } catch (err) {
+    loadError = err;
+    console.error('Module load failed:', err);
+    showLoadError(err);
+  }
+})();
+
+let audioFile = null;
+let transcriber = null;
+let modelLoaded = false;
+let allSegments = [];
+
+function handleFile(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  audioFile = file;
+  const mb = (file.size / 1024 / 1024).toFixed(2);
+  const fi = document.getElementById('fileInfo');
+  fi.style.display = 'block';
+  fi.innerHTML = '✅ <strong>' + file.name + '</strong> — ' + mb + ' MB';
+  checkReady();
+}
+
+function checkReady() {
+  transcribeBtn.disabled = !(audioFile && pipelineFn);
+}
+
+function setStatus(text, pct) {
+  document.getElementById('statusArea').style.display = 'block';
+  statusEl.textContent = text;
+  document.getElementById('progressFill').style.width = (pct || 0) + '%';
+}
+
+function formatTime(seconds) {
+  if (seconds === undefined || seconds === null) return '—';
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
+}
+
+function escapeHtml(t) {
+  return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+transcribeBtn.addEventListener('click', async () => {
+  if (!audioFile || !pipelineFn) return;
+
+  transcribeBtn.disabled = true;
+  transcribeBtn.textContent = 'Procesando...';
+  errorBox.style.display = 'none';
+  document.getElementById('resultCard').style.display = 'none';
+  document.getElementById('transcriptContent').innerHTML = '';
+  allSegments = [];
+
+  try {
+    if (!modelLoaded) {
+      setStatus('Descargando modelo de IA (~75 MB, modelo "tiny" optimizado para iPad)...', 5);
+
+      transcriber = await pipelineFn('automatic-speech-recognition', 'Xenova/whisper-tiny', {
+        progress_callback: (progress) => {
+          if (progress.status === 'downloading' && progress.total) {
+            const pct = Math.round((progress.loaded / progress.total) * 60);
+            setStatus('Descargando modelo: ' + Math.round(progress.loaded/1024/1024) + '/' + Math.round(progress.total/1024/1024) + ' MB', pct);
+          } else if (progress.status === 'loading') {
+            setStatus('Cargando modelo en memoria...', 65);
+          }
+        }
+      });
+      modelLoaded = true;
+    }
+
+    setStatus('Leyendo archivo de audio...', 70);
+    const arrayBuffer = await audioFile.arrayBuffer();
+
+    setStatus('Transcribiendo audio en español (puede tardar varios minutos)...', 75);
+
+    const result = await transcriber(arrayBuffer, {
+      language: 'spanish',
+      task: 'transcribe',
+      return_timestamps: true,
+      chunk_length_s: 30,
+      stride_length_s: 5,
+    });
+
+    setStatus('Procesando resultado...', 95);
+    displayTranscript(result, audioFile.name);
+    setStatus('✅ Transcripción completada', 100);
+    transcribeBtn.textContent = '✅ Completado';
+
+  } catch (error) {
+    console.error(error);
+    errorBox.style.display = 'block';
+    errorBox.innerHTML = '❌ Error durante la transcripción.<pre>' + escapeHtml(error.message || String(error)) + '</pre>';
+    setStatus('Error', 0);
+    transcribeBtn.disabled = false;
+    transcribeBtn.textContent = 'Reintentar';
+  }
+});
+
+function displayTranscript(result, filename) {
+  const box = document.getElementById('resultCard');
+  const content = document.getElementById('transcriptContent');
+  box.style.display = 'block';
+
+  document.getElementById('legalFile').textContent = filename;
+  document.getElementById('legalDate').textContent = new Date().toLocaleString('es-ES');
+
+  const chunks = result.chunks || [];
+
+  if (chunks.length === 0) {
+    content.innerHTML = '<div class="chunk"><div class="chunk-text">' + escapeHtml(result.text || '(Sin resultado)') + '</div></div>';
+    allSegments.push({ text: result.text || '', label: 'Completo' });
+    return;
+  }
+
+  let segments = [];
+  let currentSegment = { text: '', start: null, end: null, speaker: 'A' };
+  let speakerIndex = 0;
+  const speakers = ['A', 'B'];
+  let lastEnd = 0;
+
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    const start = chunk.timestamp ? chunk.timestamp[0] : null;
+    const end = chunk.timestamp ? chunk.timestamp[1] : null;
+
+    const gap = (start !== null && lastEnd !== null) ? (start - lastEnd) : 0;
+    const prevText = currentSegment.text.trim();
+    const endsWithPunct = /[.!?]$/.test(prevText);
+    const isSpeakerChange = (gap > 1.5) || (gap > 0.8 && endsWithPunct && prevText.length > 30);
+
+    if (isSpeakerChange && currentSegment.text.trim().length > 0) {
+      segments.push({ ...currentSegment });
+      speakerIndex = (speakerIndex + 1) % 2;
+      currentSegment = { text: '', start: start, end: end, speaker: speakers[speakerIndex] };
+    }
+
+    if (currentSegment.start === null) currentSegment.start = start;
+    currentSegment.text += (currentSegment.text ? ' ' : '') + chunk.text.trim();
+    currentSegment.end = end;
+    if (end !== null) lastEnd = end;
+  }
+  if (currentSegment.text.trim()) segments.push(currentSegment);
+
+  let html = '';
+  for (const seg of segments) {
+    const timeLabel = (seg.start !== null) ? formatTime(seg.start) + ' – ' + formatTime(seg.end) : '';
+    const speakerName = seg.speaker === 'A' ? 'Persona A' : 'Persona B';
+    html += '<div class="chunk"><div class="chunk-time">' + speakerName + ' · ' + timeLabel + '</div><div class="chunk-text">' + escapeHtml(seg.text.trim()) + '</div></div>';
+    allSegments.push({ text: seg.text.trim(), label: speakerName + ' (' + timeLabel + ')' });
+  }
+  content.innerHTML = html;
+  box.scrollIntoView({ behavior: 'smooth' });
+}
+
+window.copyAll = function() {
+  let text = 'TRANSCRIPCIÓN DE AUDIO\n';
+  text += 'Fecha: ' + new Date().toLocaleString('es-ES') + '\n';
+  text += '='.repeat(50) + '\n\n';
+  allSegments.forEach(seg => {
+    text += '[' + seg.label + ']\n' + seg.text + '\n\n';
+  });
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.querySelector('.copy-btn');
+    btn.textContent = '✅ Copiado';
+    setTimeout(() => btn.textContent = '📋 Copiar todo', 2000);
+  }).catch(() => {
+    alert('No se pudo copiar automáticamente. Seleccione el texto manualmente.');
+  });
+};
+</script>
+</body>
+</html>
