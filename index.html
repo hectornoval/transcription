@@ -177,6 +177,12 @@
 </head>
 <body>
 
+<noscript>
+  <div style="padding:20px;font-family:sans-serif;color:#9a3324;">
+    Este navegador tiene JavaScript desactivado. La transcripción no puede funcionar sin JavaScript habilitado.
+  </div>
+</noscript>
+
 <header>
   <h1>🎙️ Transcripción de Audio en Español</h1>
   <div class="sub">Procesamiento local en el dispositivo — sin clave API, sin servidores externos</div>
@@ -354,54 +360,76 @@
   }
 
   // ---------- Step 3: decode + resample audio (the part that previously caused empty results) ----------
+  // NOTE: deliberately avoids OfflineAudioContext + cross-context AudioBuffer reuse — Safari/iOS has
+  // known quirks there that can silently render silence instead of throwing an error. Manual JS
+  // downmix + linear resample is slower but deterministic and identical across browsers.
   async function decodeAndResample(file){
     const arrayBuffer = await file.arrayBuffer();
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    const tempCtx = new AudioCtx();
+    const ctx = new AudioCtx();
 
     let decoded;
     try {
       decoded = await new Promise((resolve, reject) => {
-        // Safari requires the callback form in some versions; promise form covers modern browsers.
-        const maybePromise = tempCtx.decodeAudioData(arrayBuffer.slice(0), resolve, reject);
+        const maybePromise = ctx.decodeAudioData(arrayBuffer.slice(0), resolve, reject);
         if (maybePromise && typeof maybePromise.then === 'function') {
           maybePromise.then(resolve).catch(reject);
         }
       });
     } catch (e) {
-      tempCtx.close();
+      ctx.close();
       throw new Error('No se pudo leer el audio. El formato puede no ser compatible con este navegador — probá convirtiendo el archivo a WAV o MP3.');
     }
 
-    const targetRate = 16000;
-    if (decoded.sampleRate === targetRate && decoded.numberOfChannels === 1) {
-      const data = decoded.getChannelData(0).slice();
-      tempCtx.close();
-      return data;
+    if (!decoded || decoded.length === 0) {
+      ctx.close();
+      throw new Error('El archivo se decodificó pero no contiene muestras de audio.');
     }
 
-    const offline = new OfflineAudioContext(1, Math.ceil(decoded.duration * targetRate), targetRate);
-    const source = offline.createBufferSource();
-
-    // Downmix to mono manually if needed before resampling, for reliability across browsers.
-    let monoBuffer = decoded;
-    if (decoded.numberOfChannels > 1) {
-      monoBuffer = tempCtx.createBuffer(1, decoded.length, decoded.sampleRate);
-      const out = monoBuffer.getChannelData(0);
-      for (let ch = 0; ch < decoded.numberOfChannels; ch++) {
-        const chData = decoded.getChannelData(ch);
-        for (let i = 0; i < chData.length; i++) {
-          out[i] = (out[i] || 0) + chData[i] / decoded.numberOfChannels;
-        }
+    // Downmix to mono in plain JS (no AudioBuffer sharing across contexts).
+    const numChannels = decoded.numberOfChannels;
+    const length = decoded.length;
+    const mono = new Float32Array(length);
+    for (let ch = 0; ch < numChannels; ch++) {
+      const chData = decoded.getChannelData(ch);
+      for (let i = 0; i < length; i++) {
+        mono[i] += chData[i] / numChannels;
       }
     }
 
-    source.buffer = monoBuffer;
-    source.connect(offline.destination);
-    source.start(0);
-    const rendered = await offline.startRendering();
-    tempCtx.close();
-    return rendered.getChannelData(0).slice();
+    const srcRate = decoded.sampleRate;
+    const targetRate = 16000;
+    ctx.close();
+
+    let result;
+    if (srcRate === targetRate) {
+      result = mono;
+    } else {
+      // Linear-interpolation resample.
+      const ratio = srcRate / targetRate;
+      const newLength = Math.max(1, Math.floor(mono.length / ratio));
+      result = new Float32Array(newLength);
+      for (let i = 0; i < newLength; i++) {
+        const srcPos = i * ratio;
+        const idx0 = Math.floor(srcPos);
+        const idx1 = Math.min(idx0 + 1, mono.length - 1);
+        const frac = srcPos - idx0;
+        result[i] = mono[idx0] * (1 - frac) + mono[idx1] * frac;
+      }
+    }
+
+    // Detect near-silent decode (a common silent-failure mode) and fail loudly instead of
+    // running the model on nothing and showing a blank transcript.
+    let peak = 0;
+    for (let i = 0; i < result.length; i += 64) { // sample sparsely, this array can be long
+      const v = Math.abs(result[i]);
+      if (v > peak) peak = v;
+    }
+    if (peak < 0.001) {
+      throw new Error('El audio decodificado está en silencio (nivel casi cero). Esto suele pasar cuando el navegador no pudo leer correctamente el archivo. Probá con otro formato (WAV o MP3) o con otro navegador.');
+    }
+
+    return result;
   }
 
   // ---------- Step 4: pause-based speaker diarization heuristic ----------
