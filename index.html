@@ -505,18 +505,42 @@
 
       const transcriber = await transcriberPromise;
 
-      showProgress('Transcribiendo (esto puede tardar varios minutos)…', null);
-      const result = await withTimeout(
-        transcriber(samples, {
-          chunk_length_s: 30,
-          stride_length_s: 5,
-          language: 'spanish',
-          task: 'transcribe',
-          return_timestamps: true,
-        }),
-        20 * 60 * 1000, // 20 min ceiling for long files
-        'transcribiendo el audio'
-      );
+      // iOS aggressively suspends JS in a tab once the screen locks — for a long
+      // transcription that looks identical to a freeze. Hold the screen awake while it runs.
+      let wakeLock = null;
+      try {
+        if ('wakeLock' in navigator) {
+          wakeLock = await navigator.wakeLock.request('screen');
+        }
+      } catch (e) { /* not critical — continue without it */ }
+
+      // No native per-chunk progress exists for this call, so show an elapsed-time
+      // heartbeat — without it, a slow (but working) transcription looks identical to a frozen one.
+      const t0 = Date.now();
+      const ticker = setInterval(() => {
+        const secs = Math.round((Date.now() - t0) / 1000);
+        const mins = Math.floor(secs / 60);
+        showProgress(`Transcribiendo… (${mins}m ${secs % 60}s — no bloquees la pantalla ni cambies de app)`, null);
+      }, 1000);
+      showProgress('Transcribiendo… (0s transcurridos)', null);
+
+      let result;
+      try {
+        result = await withTimeout(
+          transcriber(samples, {
+            chunk_length_s: 30,
+            stride_length_s: 5,
+            language: 'spanish',
+            task: 'transcribe',
+            return_timestamps: true,
+          }),
+          60 * 60 * 1000, // 60 min ceiling — long files on single-threaded WASM can be slow
+          'transcribiendo el audio'
+        );
+      } finally {
+        clearInterval(ticker);
+        if (wakeLock) wakeLock.release().catch(() => {});
+      }
 
       const chunks = result.chunks && result.chunks.length
         ? result.chunks
